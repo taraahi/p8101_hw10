@@ -1,0 +1,134 @@
+---
+title: "Lab 11 Student Problem"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+
+## Student Problem 01
+
+We are going to walk through the process of fitting a polynomial predictive model to a data set using cross-validation.
+
+(1) Load the `poly_example.csv` data set into your environment and take a look. Plot the data to get an idea of the feature-outcome relationship.
+
+```{r}
+
+
+
+```
+
+(2) Create a training and testing data set. The train/test split should be 80/20.
+
+```{r}
+
+
+
+
+```
+
+(3) Write a function that will fit a polynomial model to the data. The function should take a dataframe input and an argument indicating the degree of the polynomial to fit.
+
+```{r}
+
+
+
+```
+
+(4) Fit polynomial models from degree 1 to 20 to the entire training dataset. 
+
+```{r}
+
+
+
+```
+
+(5) Write a function that will plot predictions from a fit polynomial model to a dataset.
+
+```{r}
+
+## Take a look at broom::augment()
+
+
+
+```
+
+(6) Create a faceted plot of all 20 model predictions on the entire training dataset. Save it as a .png file so you can view and share it easily.
+
+```{r}
+
+
+
+```
+
+(7) Based on the graph from (6), is it possible to determine which degree fits best?
+
+```{r}
+
+
+
+```
+
+(8) Using the code below, perform 10-fold CV to obtain cross-validated RMSE measures to help make your decision for the best degree model to fit. 
+
+```{r}
+
+## Create folds for cross-validation
+create_folds <- function(df, k){
+  df_k <- df %>%
+    slice_sample(prop = 1) %>%
+    mutate(fold = 1 + (row_number()-1) %/% (nrow(df)/k))
+  return(df_k)
+}
+
+## Function to get RMSE
+## make sure you have caret installed for calculating RMSE
+# install.packages("caret")
+
+get_RMSE <- function(df, model){
+  predicted_df <- augment(model, newdata = df) %>%
+    select(feature, outcome, .fitted)
+  rmse <- RMSE(predicted_df %>% pull(.fitted), predicted_df %>% pull(outcome))
+  return(rmse)
+}
+
+# Fit model on all but one fold, test on last fold
+
+fit_and_assess <- function(df, f, degree){
+  holdout <- df %>%
+    filter(fold == f)
+  train <- df %>%
+    filter(fold != f)
+  train_mod <- fit_poly(df = train, degree = degree)
+  holdout_rmse <- get_RMSE(df = holdout, model = train_mod)
+  return(holdout_rmse)
+}
+
+# k-fold cross-validation
+
+perform_k_fold_cv <- function(df, k, degree){
+  folded_df <- create_folds(df = df, k = k)
+  holdout_rmse_vals <- map_dbl(1:k, function(x) fit_and_assess(df = folded_df, 
+                                                               f = x, 
+                                                               degree = degree))
+  mean_rmse <- mean(holdout_rmse_vals)
+  return(mean_rmse)
+}
+
+
+# Perform the same action over varying degrees of polynomials (from 1 to 20)
+
+
+```
+
+(9) Fit your final model to the whole training set, graph the predictions for the the test set, and report the RMSE for the test set.
+
+```{r}
+
+
+
+
+
+```

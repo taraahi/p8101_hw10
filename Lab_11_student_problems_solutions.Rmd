@@ -1,0 +1,280 @@
+---
+title: "Lab 11 Student Problem"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+
+## Student Problem 01
+
+We are going to walk through the process of fitting a polynomial predictive model to a data set using cross-validation.
+
+(1) Load the `poly_example.csv` data set into your environment and take a look. Plot the data to get an idea of the feature-outcome relationship.
+
+```{r}
+
+library(tidyverse)
+
+raw_data <- read_csv("data/poly_example.csv")
+
+# Take a look at the data
+ggplot(data = raw_data) +
+  geom_point(aes(x = feature, y = outcome)) +
+  theme_bw()
+
+
+```
+
+(2) Create a training and testing data set. The train/test split should be 80/20.
+
+```{r}
+
+training_set <- raw_data %>%
+  slice_sample(prop = 0.8) # random sample of 80% of observations
+
+testing_set <- raw_data %>%
+  anti_join(training_set)
+
+# Take a look at our two training/test datasets
+ggplot(data = training_set) +
+  geom_point(aes(x = feature, y = outcome), color = "blue") +
+  theme_bw()
+
+ggplot(data = testing_set) +
+  geom_point(aes(x = feature, y = outcome), color = "red") +
+  theme_bw()
+
+```
+
+(3) Write a function that will fit a polynomial model to the data. The function should take a dataframe input and an argument indicating the degree of the polynomial to fit.
+
+```{r}
+
+# Review of how str_c() works:
+# outcome ~ poly(feature, x)
+name <- "Cale"
+str_c("Hello,", "My name is", name)
+
+# String goal is to "outcome ~ poly(feature, 25)"
+num <- 25
+str_c("outcome ~ poly(feature,", num, ")")
+
+fit_poly <- function(df, degree){
+  s <- str_c("outcome ~ poly(feature,", degree, ")")
+  form <- as.formula(s)
+  mod <- lm(form, data = df)
+  return(mod)
+}
+
+str_c("outcome ~ poly(feature,", 10, ")")
+
+library(broom)
+
+# Check that the function is working
+fit_poly(training_set, 1) %>% tidy()
+fit_poly(training_set, 2) %>% tidy()
+fit_poly(training_set, 10) %>% tidy()
+
+```
+
+(4) Fit polynomial models from degree 1 to 20 to the entire training dataset. 
+
+```{r}
+
+# You could do this one model at a time:
+poly_1 <- fit_poly(training_set, 1)
+poly_2 <- fit_poly(training_set, 2)
+
+# Fit all 20 moels in one line:
+poly_models <- map(1:20, function(x) fit_poly(training_set, x))
+
+# Take a look at specific entries
+poly_models[[1]] %>% tidy()
+poly_models[[15]] %>% tidy()
+
+```
+
+(5) Write a function that will plot predictions from a fit polynomial model to a dataset.
+
+```{r}
+
+## Take a look at broom::augment()
+# This function predicts outcomes using a fit model on input data using the newdata argument
+poly_2_pred <- augment(poly_models[[2]], newdata = training_set)
+
+longer_df <- poly_2_pred %>%
+  pivot_longer(cols = outcome:.fitted,
+               names_to = "type",
+               values_to = "value")
+
+ggplot(data = longer_df) +
+  geom_point(aes(x = feature, y = value, color = type)) +
+  theme_bw() +
+  scale_color_manual(values = c("outcome" = "black",
+                                ".fitted" = "red"))
+
+## Write a function that generalizes this
+# Function that will make a graph of the observed and predicted data
+
+make_pred_graph <- function(df, model){
+  pred_df <- augment(model, newdata = df)
+  longer_df <- pred_df %>%
+    pivot_longer(cols = outcome:.fitted,
+               names_to = "type",
+               values_to = "value")
+  plot <- ggplot(data = longer_df) +
+    geom_point(aes(x = feature, y = value, color = type)) +
+    theme_bw() +
+    scale_color_manual(values = c("outcome" = "black",
+                                ".fitted" = "red"))
+  return(plot)
+}
+
+make_pred_graph(training_set, poly_models[[1]])
+make_pred_graph(training_set, poly_models[[3]])
+make_pred_graph(training_set, poly_models[[10]])
+
+
+```
+
+(6) Create a faceted plot of all 20 model predictions on the entire training dataset. Save it as a .png file so you can view and share it easily.
+
+```{r}
+
+# helper function to create a dataframe
+pred_helper <- function(df, model, num){
+  pred_df <- augment(model, newdata = df)
+  longer_df <- pred_df %>%
+    pivot_longer(cols = outcome:.fitted,
+               names_to = "type",
+               values_to = "value") %>%
+    mutate(degree = num)
+}
+
+pred_helper(training_set, poly_models[[3]], 3) %>% View()
+
+# Create faceted data in one line:
+facet_data <- map_dfr(1:20, function(y) pred_helper(training_set, poly_models[[y]],
+                                                    y))
+# Plot all the fits at once:
+ggplot(data = facet_data) +
+  geom_point(aes(x = feature, y = value, color = type)) +
+  theme_bw() +
+  facet_wrap(~degree) +
+  scale_color_manual(values = c("outcome" = "black",
+                                ".fitted" = "red")) +
+  theme(legend.position = "bottom")
+
+# Save as a large image to take a look at in more detail
+ggsave("faceted_graph.png", width = 10, height = 11)
+
+
+```
+
+(7) Based on the graph from (6), is it possible to determine which degree fits best?
+
+```{r}
+
+# No! They all look very similar!
+
+```
+
+(8) Using the code below, perform 10-fold CV to obtain cross-validated RMSE measures to help make your decision for the best degree model to fit. 
+
+```{r}
+
+## Create folds for cross-validation
+create_folds <- function(df, k){
+  df_k <- df %>%
+    slice_sample(prop = 1) %>%
+    mutate(fold = 1 + (row_number()-1) %/% (nrow(df)/k))
+  return(df_k)
+}
+
+testing_folds <- create_folds(training_set, 10)
+
+testing_folds %>%
+  group_by(fold) %>%
+  tally()
+
+## Function to get RMSE
+## make sure you have caret installed for calculating RMSE
+# install.packages("caret")
+library(caret)
+
+get_RMSE <- function(df, model){
+  predicted_df <- augment(model, newdata = df) %>%
+    select(feature, outcome, .fitted)
+  rmse <- RMSE(predicted_df %>% pull(.fitted), predicted_df %>% pull(outcome))
+  return(rmse)
+}
+
+# Fit model on all but one fold, test on last fold
+
+fit_and_assess <- function(df, f, degree){
+  holdout <- df %>%
+    filter(fold == f)
+  train <- df %>%
+    filter(fold != f)
+  train_mod <- fit_poly(df = train, degree = degree)
+  holdout_rmse <- get_RMSE(df = holdout, model = train_mod)
+  return(holdout_rmse)
+}
+
+# k-fold cross-validation
+
+perform_k_fold_cv <- function(df, k, degree){
+  folded_df <- create_folds(df = df, k = k)
+  holdout_rmse_vals <- map_dbl(1:k, function(x) fit_and_assess(df = folded_df, 
+                                                               f = x, 
+                                                               degree = degree))
+  mean_rmse <- mean(holdout_rmse_vals)
+  return(mean_rmse)
+}
+
+
+# Perform the same action over varying degrees of polynomials (from 1 to 20)
+
+# Once again, you can do one at a time
+perform_k_fold_cv(df = training_set, k = 10, degree = 1)
+perform_k_fold_cv(df = training_set, k = 10, degree = 2)
+perform_k_fold_cv(df = training_set, k = 10, degree = 5)
+
+# Or you can do all at once
+poly_rmses <- map_dbl(1:20, function(x) perform_k_fold_cv(df = training_set,
+                                                          k = 10,
+                                                          degree = x))
+
+poly_rmses
+
+# Put all the rmse values into a tibble for graphing
+rmse_tibble <- tibble(degree = 1:20, rmse = poly_rmses)
+
+ggplot(data = rmse_tibble) +
+  geom_point(aes(x = degree, y = rmse)) +
+  geom_line(aes(x = degree, y = rmse)) +
+  theme_bw() +
+  scale_x_continuous(breaks = 1:20)
+
+
+```
+
+(9) Fit your final model to the whole training set, graph the predictions for the the test set, and report the RMSE for the test set.
+
+```{r}
+
+# I have chosen a degree 4, but yours can differ:
+final_mod <- fit_poly(training_set, 4)
+
+# Take a look at predictions on test set
+make_pred_graph(testing_set, final_mod)
+
+# Get RMSE on the test set
+get_RMSE(testing_set, final_mod)
+
+rmse_tibble %>% View()
+
+```

@@ -1,0 +1,285 @@
+---
+title: "Week 11 Examples"
+output: 
+  html_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(broom)
+library(caret)
+library(flextable)
+library(officer)
+library(gtsummary)
+```
+
+## Polynomial regression in R
+
+This section shows how to fit polynomial regressions in R.
+
+```{r}
+
+example_poly <- read_csv("data/example_poly.csv")
+
+ggplot(example_poly) +
+  geom_point(aes(x = x, y = y)) +
+  theme_bw()
+
+# Polynomial degree 1
+
+deg_1 <- lm(y ~ poly(x, 1), data = example_poly)
+
+deg_1
+
+summary(deg_1)
+
+# Polynomial degree 2
+
+deg_2 <- lm(y ~ poly(x, 2), data = example_poly)
+
+deg_2
+
+summary(deg_2)
+
+## obtain predictions from a model using broom::augment
+
+predicted <- augment(deg_1)
+
+make_pred_graph <- function(df, model){
+  preds <- augment(model, newdata = df) %>%
+    select(x, obs = y, predicted = .fitted) %>%
+    pivot_longer(cols = 2:3,
+                 values_to = "y",
+                 names_to = "type")
+  plot <- ggplot(preds) +
+    geom_point(aes(x = x, y = y, color = type)) +
+    theme_bw()
+  return(plot)
+}
+  
+make_pred_graph(example_poly, deg_1)
+
+deg_2 <- lm(y ~ poly(x, 2), data = example_poly)
+make_pred_graph(example_poly, deg_2)
+
+deg_3 <- lm(y ~ poly(x, 3), data = example_poly)
+make_pred_graph(example_poly, deg_3)
+
+deg_4 <- lm(y ~ poly(x, 4), data = example_poly)
+make_pred_graph(example_poly, deg_4)
+
+deg_25 <- lm(y ~ poly(x, 25), data = example_poly)
+make_pred_graph(example_poly, deg_25)
+
+
+```
+
+
+## Fitting a polynomial using cross-validation
+
+In this section we will walk through fitting a polynomial using cross-validation.
+
+```{r}
+
+bio_bmi <- read_csv("data/bmi.csv")
+
+ggplot(bio_bmi) +
+  geom_point(aes(x = bmi, y = biomarker)) +
+  theme_bw()
+
+model1 <- lm(biomarker ~ poly(bmi, 1), data = bio_bmi)
+
+make_pred_graph <- function(df, model){
+  preds <- augment(model, newdata = df) %>%
+    select(bmi, obs = biomarker, predicted = .fitted) %>%
+    pivot_longer(cols = 2:3,
+                 values_to = "biomarker",
+                 names_to = "type")
+  plot <- ggplot(preds) +
+    geom_point(aes(x = bmi, y = biomarker, color = type)) +
+    theme_bw()
+  return(plot)
+}
+
+make_pred_graph(bio_bmi, model1)
+
+## Separate Training Data Set and Test Set
+
+training_set <- slice_sample(bio_bmi, prop = 0.75)
+
+## Rare but handy use of anti_join()
+test_set <- bio_bmi %>%
+  anti_join(training_set, by = "patient_id")
+
+## Plot training data and test data
+ggplot(data = test_set) +
+  geom_point(aes(x = bmi, y = biomarker), color = "darkgreen") +
+  theme_bw()
+
+ggplot(data = training_set) +
+  geom_point(aes(x = bmi, y = biomarker), color = "purple") +
+  theme_bw()
+
+# Now we will tune our model on the training set and will not touch the test set until the very end
+
+## Create folds for cross-validation
+
+create_folds <- function(df, k){
+  df_k <- df %>%
+    slice_sample(prop = 1) %>%
+    mutate(fold = 1 + (row_number()-1) %/% (nrow(df)/k))
+  return(df_k)
+}
+
+# Test that this works:
+
+create_folds(df = training_set, k = 5) %>% 
+  group_by(fold) %>%
+  count()
+
+create_folds(df = training_set, k = 10) %>%
+  group_by(fold) %>%
+  count()
+
+## Function to perform polynomial regression
+
+fit_poly <- function(df, degree){
+  pre_form <- str_c("biomarker ~ poly(bmi,", degree, ")")
+  form <- as.formula(pre_form)
+  model <- lm(form, data = df)
+  return(model)
+}
+
+fit_poly(df = training_set, degree = 1)
+fit_poly(df = training_set, degree = 2)
+fit_poly(df = training_set, degree = 3)
+
+
+## Function to get RMSE
+## make sure you have caret installed for calculating RMSE
+# install.packages("caret")
+
+get_RMSE <- function(df, model){
+  predicted_df <- augment(model, newdata = df) %>%
+    select(bmi, biomarker, .fitted)
+  rmse <- RMSE(predicted_df$.fitted, predicted_df$biomarker)
+  return(rmse)
+}
+
+get_RMSE(df = training_set, model = model1)
+
+# Fit model on all but one fold, test on last fold
+
+fit_and_assess <- function(df, f, degree){
+  holdout <- df %>%
+    filter(fold == f)
+  train <- df %>%
+    filter(fold != f)
+  train_mod <- fit_poly(df = train, degree = degree)
+  holdout_rmse <- get_RMSE(df = holdout, model = train_mod)
+  return(holdout_rmse)
+}
+
+# k-fold cross-validation
+
+perform_k_fold_cv <- function(df, k, degree){
+  folded_df <- create_folds(df = df, k = k)
+  holdout_rmse_vals <- map_dbl(1:k, function(x) fit_and_assess(df = folded_df, 
+                                                               f = x, 
+                                                               degree = degree))
+  mean_rmse <- mean(holdout_rmse_vals)
+  return(mean_rmse)
+}
+
+perform_k_fold_cv(df = training_set, k = 10, degree = 1)
+perform_k_fold_cv(df = training_set, k = 10, degree = 2)
+perform_k_fold_cv(df = training_set, k = 10, degree = 3)
+
+# Perform the same action over varying degrees of polynomials (from 1 to 25)
+
+degree_vals <- map_dbl(1:25, function(x) perform_k_fold_cv(df = training_set, 
+                                                           k = 10, degree = x))
+
+cv_res_tib <- tibble(degree = 1:25, cv_rmse = degree_vals)
+
+ggplot(data = cv_res_tib) +
+  geom_point(aes(x = degree, y = cv_rmse)) +
+  geom_line(aes(x = degree, y = cv_rmse), color = "grey") +
+  theme_bw() +
+  labs(title = "RMSE from 10-fold Cross-validation",
+       x = "Degree", y = "Cross-validated RMSE")
+
+cv_res_tib %>%
+  arrange(cv_rmse)
+
+# Final model: 
+
+final_model <- fit_poly(df = training_set, degree = 4)
+
+make_pred_graph(df = training_set, model = final_model)
+
+### At the very end we fit the training data and see how our final model performs on the test data that we have been holding out this whole time:
+
+make_pred_graph(df = test_set, model = final_model)
+
+get_RMSE(test_set, model = final_model)
+
+```
+
+## Outputting a table from gtsummary to a word document
+
+```{r}
+
+# Let's take a tbl_summary object from last week's lab:
+
+stroke_raw <- read_csv("data/stroke_data.csv")
+
+stroke_cl <- stroke_raw %>%
+  select(-id) %>%
+  mutate(bmi = as.numeric(bmi))
+
+out_tbl <- stroke_cl %>%
+  select(stroke, everything()) %>%
+  mutate(smoking_status = factor(smoking_status, levels = c("never smoked", "smokes","formerly smoked"))) %>%
+  tbl_summary(by = "work_cl",
+    label = list(gender ~ "Gender",
+                           age ~ "Age",
+                           hypertension ~ "Hypertension Positive",
+                           heart_disease ~ "Heart Disease Positive",
+                           Residence_type ~ "Residence Type",
+                           ever_married ~ "Ever Married",
+                           avg_glucose_level ~ "Average Glucose Level",
+                           bmi ~ "BMI",
+                           smoking_status ~ "Smoking Status",
+                           stroke ~ "Stroke Occurred",
+                           work_cl ~ "Employment Type"),
+              
+              statistic = all_continuous() ~ "{mean} ({sd}); ({min}, {max})",
+              missing_text = "Missing") %>%
+  add_p(test = all_continuous() ~ "aov",
+    test.args = all_tests("fisher.test") ~ list(simulate.p.value = TRUE))
+
+# To output we are going to use as_flex_table() function and then use the officer package
+# install.packages("flextable") if you don't have it already
+
+flex_out <- out_tbl %>%
+  as_flex_table() %>%
+  theme_box() # creates basic table with all borders
+
+## officer package
+# install.packages("officer")
+
+read_docx() %>%
+  body_add_flextable(flex_out) %>%
+  print("flex_out.docx")
+
+## add landscape format
+read_docx() %>%
+  body_add_flextable(flex_out) %>%
+  body_end_section_landscape() %>%
+  print("flex_out.docx")
+
+
+```

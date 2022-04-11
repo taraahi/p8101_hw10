@@ -1,0 +1,333 @@
+---
+title: "Homework 10"
+author: "Tara Ahi"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+library(tidyverse)
+library(broom)
+library(knitr)
+library(caret)
+library(rlang)
+library(patchwork)
+```
+
+```{r}
+
+set.seed(17) # This line of code will ensure that every time the RMD is knit, the same results are obtained -- please do not edit this code.
+
+```
+
+## Question 1
+
+In this question we will go through fitting a polynomial regression to a new data set using k-fold cross-validation. The goal is to gain an understanding of how k-fold cross-validation works with this hands-on example.
+
+### a)
+
+Load the simulated `bp_dosage.csv` file into R. For this exercise we will be trying to build a model that predicts blood pressure (`bp`) based on continuous dosage `dosage`.
+
+Make a graph of dosage and blood pressure. Does it look like there is a linear relationship between continuous dosage and blood pressure? Describe in a sentence how blood pressure seems to change as dosage increases.
+
+```{r}
+bp_data <- read_csv("hw_data/bp_dosage.csv")
+
+ggplot(data = bp_data) +
+  geom_point(aes(x = dosage, y = bp)) +
+  theme_bw()
+
+```
+
+**Up until about 1.25, dosage seems to have a negative relationship/correlation with blood pressure-- from 0 to 1.25, the higher the dosage is, the lower the blood pressure is; after 1.25, there is a steep positive relationship/correlation between dosage and blood pressure.**
+
+### b)
+
+Adapt the code from this week's R videos and lab to create a function that will fit a polynomial model to the blood pressure data. Your function should take take a data frame and a number (degree), and should output a fit polynomial model of that degree.
+
+Test that your function works by fitting polynomial models of degree 1, 5, and 10 to the full blood pressure data.
+
+See lab 65-79
+
+```{r}
+fit_function <- function(df, degree) {
+  s <- str_c("bp ~ poly(dosage,", degree, ")")
+  form <- as.formula(s)
+  mod <- lm( form, data = df)
+  return(mod)
+}
+
+#1 degree
+fit_function(bp_data, 1)
+#5 degrees
+fit_function(bp_data, 5)
+#10 degrees
+fit_function(bp_data, 10)
+
+```
+
+### c)
+
+Next, adapt the function from the R video and lab code that plots predicted values of a polynomial model. Make it so that it works with the variable names for the blood pressure data, and make it so that the title of the graph mentions the degree of the polynomial fit (you can use a new function argument for this). Test this function by making plots of the three models you fit on the full data set in part (b).
+
+
+```{r}
+deg_1 <- lm(bp ~ poly(dosage, 1), data = bp_data)
+deg_5 <- lm(bp ~ poly(dosage, 5), data = bp_data)
+deg_10 <- lm(bp ~ poly(dosage, 10), data = bp_data)
+
+predictive_function <- function(df, model, degree){
+  pred <- augment(model, newdata = df) %>% 
+    select(dosage, bp, .fitted) %>% 
+    pivot_longer(cols = bp:.fitted,
+                 values_to = "bp",
+                 names_to = "type")
+  graph = ggplot(pred) +
+    geom_point(aes(x = dosage, y = bp, color = type)) +
+    theme_minimal() +
+    labs(x = "Dosage", y = "Blood Pressure (mmHg)", color = "Type", title = str_to_title(paste("Fitted Polynomial Model by", as_string(ensym(degree)))))
+  return(graph)
+}
+
+predictive_function(bp_data, deg_1, "Degree 1") #seems ok, might be underfitted
+predictive_function(bp_data, deg_5, "Degree 5") #overfitted
+predictive_function(bp_data, deg_10, "Degree 10") #overfitted
+```
+
+### d)
+
+Now let's begin the true cross-validation and fitting process. First split the data into training and test sets. Make the training set a random sample of 80% of the original data, and make the test set all remaining observations (other 20%) from the original dataset.
+
+```{r}
+training_set <- bp_data %>% 
+  slice_sample(prop = 0.8)
+
+test_set <- bp_data %>%
+  anti_join(training_set)
+#joined by patient_id
+
+#plots!
+ggplot(data = training_set) +
+  geom_point(aes(x = dosage, y = bp), color = "darkgreen") +
+  theme_classic()
+
+ggplot(data = test_set) +
+  geom_point(aes(x = dosage, y = bp), color = "violet") +
+  theme_classic()
+
+```
+
+### e)
+
+Now use the `create_folds` function from the R video and lab code. Confirm that it works by making two new datasets out of the training set: one with 5 folds and one with 10 folds. Present summaries of the number of observations in each fold using `kable()`.
+
+```{r}
+fold_function <- function(df, k){
+  df_k <- df %>% 
+    slice_sample(prop = 1) %>% 
+    mutate(fold = 1 + (row_number() - 1) %/% (nrow(df)/k))
+  return(df_k)
+}
+
+#5 folds check
+test_5folds <- fold_function(training_set, 5)
+test_5folds %>% 
+  group_by(fold) %>% 
+  tally() %>% 
+  kable() #48
+
+#10 folds check
+test_10folds <- fold_function(training_set, 10)
+test_10folds %>% 
+  group_by(fold) %>% 
+  tally() %>% 
+  kable() #24
+```
+
+### f)
+
+Next, adapt the `get_RMSE` function from the R video code so that it works correctly with the new data set. Additionally, copy the `fit_and_assess` function. Explain how the `fit_and_assess` function works: 
+
+(1) What is the purpose of the `f` argument? 
+
+**The purpose of the `f` argument is to identify which fold is the holdout fold and which isn't-- it's not used when fitting the model. **
+
+(2) Which part of the data frame input `df` is used to fit the model, and which part of the data frame input `df` is used to evaluate the model using `get_RMSE()`?
+
+**The _training_ part of the data frame is used to fit the model and the holdout section of the data frame is used to evaluate the model using `get_RMSE` (my function is called `rmse_function`).**
+
+```{r}
+#get rmse function
+rmse_function <- function(df, model){
+  prediction_df <- augment(model, newdata = df) %>% 
+    select(dosage, bp, .fitted)
+  rmse <- RMSE(prediction_df$.fitted, prediction_df$bp)
+  return(rmse)
+}
+#testing
+rmse_function(df = training_set, model = fit_function(bp_data, 1))
+
+#fit and assess function
+model_fit_function <- function(df, f, degree){
+  hold <- df %>% 
+    filter(fold == f)
+  training <- df %>% 
+    filter(fold != f)
+  train_model <- fit_function(df = training, degree = degree)
+  hold_rmse <- rmse_function(df = hold, model = train_model)
+  return(hold_rmse)
+}
+
+```
+
+### g)
+
+Now import the `perform_k_fold_cv` function. Check that it is working by performing 10-fold cross-validation for degree 1, 5, and 10 polynomials. Report the cross-validated RMSE for each of these degrees in a sentence using in-line coding.
+
+```{r}
+
+perform_k_fold_cv <- function(df, k, degree){
+  folded_df <- fold_function(df = df, k = k)
+  holdout_rmse_vals <- map_dbl(1:k, function(x) model_fit_function(df = folded_df, f = x, degree = degree))
+  mean_rmse <- mean(holdout_rmse_vals)
+  return(mean_rmse)
+  }
+
+rmse_1 <- perform_k_fold_cv(df = training_set, k = 10, degree = 1)
+rmse_5 <- perform_k_fold_cv(df = training_set, k = 10, degree = 5)
+rmse_10 <- perform_k_fold_cv(df = training_set, k = 10, degree = 10)
+
+```
+
+### h)
+
+Finally use `map_dbl()` to obtain 10-fold cross-validated RMSE values for polynomial models from degree 1 to degree 20. Create a graph that shows the cross-validated RMSE values across different polynomial degrees -- make sure you have meaningful labels in this graph.
+
+```{r}
+#map_dbl
+cv_df <- map_dbl(1:20, function(x) perform_k_fold_cv(df = training_set, k = 10, degree = x))
+#tibble
+cv_tibble <- tibble(degree = 1:20, cv_rmse = cv_df)
+#graph
+graph_10 <- ggplot(data = cv_tibble) +
+  geom_point(aes(x = degree, y = cv_rmse)) +
+  geom_line(aes(x = degree, y = cv_rmse), color = "navy") +
+  theme_minimal() +
+  labs(title = "10-fold Cross Validation RMSE Values", x = "Degree", y = "CV RMSE")
+graph_10
+  
+```
+
+### i)
+
+Based on your results and graph in question (h), which degree polynomial do you think performs best?
+
+```{r}
+
+cv_tibble %>% 
+  arrange(cv_rmse)
+
+```
+
+**While 9 degrees has the lowest RMSE (which is ideal), using degree 4 would help avoid overfitting. The RMSE value is close and we want to be parsimonious.**
+
+### j)
+
+The most common "k" chosen in k-fold cross-validation is 10, but with smaller datasets 5-fold cross-validation is sometimes used. Reproduce the graph in (h) by performing 5-fold cross-validation to obtain RMSE values from degree 1 to 20. Does the graph look different? Would you have come to a different decision about which degree polynomial performs best?
+
+```{r}
+#map
+degree_5 <- map_dbl(1:20, function(x) perform_k_fold_cv(df = training_set, k = 5, degree = x))
+#tibble
+degree_5_tibble <- tibble(degree = 1:20, cv_rmse = degree_5)
+#graph
+graph_5 <- ggplot(data = degree_5_tibble) +
+  geom_point(aes(x = degree, y = cv_rmse)) +
+  geom_line(aes(x = degree, y = cv_rmse), color = "turquoise") +
+  theme_minimal() +
+  labs(title = "5-fold Cross Validation RMSE Values", x = "degree", y = "CV RMSE")
+graph_5
+
+rmse_graph_comparison = graph_10 / graph_5
+rmse_graph_comparison
+
+degree_5_tibble %>% 
+  arrange(cv_rmse)
+```
+
+**The graphs look very similar. We would _not_ come to a different conclusion, degree 4 still seems like the best degree polynomial to use as it has the lowest RMSE.**
+
+### k)
+
+Now, choose what you believe to be the best performing degree value and fit a polynomial model to the entire training data set. Create a graph showing predicted values for the training data set.
+
+```{r}
+entire_model <- fit_function(training_set, 4)
+
+predictive_function(training_set, entire_model)
+```
+
+### l)
+
+Finally, use the model you fit on the entire training set to predict values for the test set. **Report this RMSE value in a sentence** and also **create a graph that shows your model predictions** for the test data set.
+
+```{r}
+#now using test set
+predictive_function(test_set, entire_model)
+
+#get RMSE
+test_rmse <- rmse_function(test_set, entire_model)
+test_rmse #2.614926
+```
+
+The RMSE of the test set using 4 degrees is `r test_rmse`.
+
+### m)
+
+What do you think about the final model you selected? Does the graph in part (l) look like a good fit to the test data set?
+
+**Yes, the graph in part (l) does look like a good fit to the test data set. There is a similar pattern and the fitted points closely follow the observation points.**
+
+### n)
+
+You may notice that one run of k-fold cross-validation can be unstable, producing slightly different results each time. To improve the process, sometimes __repeated__ cross-validation is used. For this question, perform __repeated__ 10-fold cross-validation by obtaining cross-validated RMSE for each degree (1 to 20) polynomial model 5 times and then taking their average. Create a graph of these results with an appropriate title -- are they different from the results you obtained from one run of 10-fold cross-validation in part (h)?
+
+```{r}
+rmse1 <- map_dbl(1:20, function(x) perform_k_fold_cv(df = training_set, k = 10, degree = x))
+rmse1_tibble <- tibble(degree = 1:20, rmse = rmse1)
+
+rmse2 <- map_dbl(1:20, function(x) perform_k_fold_cv(df = training_set, k = 10, degree = x))
+rmse2_tibble <- tibble(degree = 1:20, rmse = rmse2)
+
+rmse3 <- map_dbl(1:20, function(x) perform_k_fold_cv(df = training_set, k = 10, degree = x))
+rmse3_tibble <- tibble(degree = 1:20, rmse = rmse3)
+
+rmse4 <- map_dbl(1:20, function(x) perform_k_fold_cv(df = training_set, k = 10, degree = x))
+rmse4_tibble <- tibble(degree = 1:20, rmse = rmse4)
+
+rmse5 <- map_dbl(1:20, function(x) perform_k_fold_cv(df = training_set, k = 10, degree = x))
+rmse5_tibble <- tibble(degree = 1:20, rmse = rmse5)
+
+final_mean_RMSE <- bind_rows(rmse1_tibble, rmse2_tibble, rmse3_tibble, rmse4_tibble, rmse5_tibble) %>% 
+  group_by(degree) %>% 
+  summarize(meanrmse = mean(rmse))
+
+n_graph <- ggplot(data = final_mean_RMSE) +
+  geom_point(aes(x = degree, y = meanrmse)) +
+  geom_line(aes(x = degree, y = meanrmse)) +
+  theme_minimal() +
+  scale_x_continuous(breaks = 1:20) +
+  labs(x = "Degree", y = "Mean Cross-Validated RMSE Value", title = "Mean RMSE Values from 5 10-fold Cross Validatin by Degree")
+
+final_comparison = graph_10 / n_graph
+final_comparison
+```
+
+**The results look very similar, with 4 degrees being the optimal polynomial degree value for both, however they are not _exactly_ the same.**
+
+
+
